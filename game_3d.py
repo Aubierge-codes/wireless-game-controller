@@ -319,7 +319,7 @@ def update():
     # -------------------------
     desired_camera_position = car.position + car.back * CAMERA_BACK + Vec3(0, CAMERA_HEIGHT, 0)
     camera.position = lerp(camera.position, desired_camera_position, dt * camera_smoothness)
-    camera.look_at(car.position + car.forward * CAMERA_LOOK_AHEAD + Vec3(0, 1, 0))
+    camera.look_at(car.position + car.forward * CAMERA_LOOK_AHEAD + Vec3(0, 1, 0), up=Vec3(0, 1, 0))  # world up, so the camera never rolls
 
     # -------------------------
     # UI updates
