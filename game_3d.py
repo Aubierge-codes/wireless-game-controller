@@ -220,9 +220,10 @@ win_text = Text(text="", origin=(0, 0), position=(0, 0.1), scale=2.5, color=colo
 # -----------------------------
 
 camera_smoothness = 7
-CAMERA_BACK = 10      # distance behind the car
-CAMERA_HEIGHT = 5.5   # height above the car
-CAMERA_LOOK_AHEAD = 22  # camera aims this far in front of the car
+camera.fov = 80
+CAMERA_BACK = 12      # distance behind the car
+CAMERA_HEIGHT = 6.5   # height above the car
+CAMERA_LOOK_AHEAD = 8   # aim slightly ahead so the car stays in view with the road
 
 
 # -----------------------------
