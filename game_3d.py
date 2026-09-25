@@ -40,22 +40,16 @@ ROAD_WIDTH = 10
 ROAD_LENGTH = 1600
 FINISH_Z = ROAD_LENGTH - 30   # crossing this line wins the race
 START_Z = 5
-SEGMENT_LENGTH = 6
-
-
-def course_blend(z):
-    """0 on the flat straight at the start and finish, 1 in the middle of the course."""
-    return clamp(z / 120, 0, 1) * clamp((FINISH_Z - 60 - z) / 120, 0, 1)
 
 
 def road_x(z):
-    """Sideways position of the road centre - gentle bends left and right."""
-    return course_blend(z) * (20 * math.sin(z / 95) + 9 * math.sin(z / 41))
+    """Sideways position of the road centre - the road is dead straight."""
+    return 0.0
 
 
 def road_y(z):
-    """Height of the road - mountains it climbs and then drops down from."""
-    return course_blend(z) * (5 * (1 - math.cos(z / 60)) + 3 * (1 - math.cos(z / 25)))
+    """Height of the road - perfectly flat."""
+    return 0.0
 
 
 def road_point(z):
@@ -119,42 +113,33 @@ for _ in range(24):
 # Road, barriers, support columns
 # -----------------------------
 
-for z0 in range(0, ROAD_LENGTH + 20, SEGMENT_LENGTH):
-    p0, p1 = road_point(z0), road_point(z0 + SEGMENT_LENGTH)
-    length = distance(p0, p1)
+ROAD_START_Z = -20
+ROAD_END_Z = ROAD_LENGTH + 20
+road_mid_z = (ROAD_START_Z + ROAD_END_Z) / 2
+road_span = ROAD_END_Z - ROAD_START_Z
 
-    seg = Entity(position=(p0 + p1) / 2)
-    seg.look_at(p1)
+# One thick solid slab: top surface at y = 0.15, 2 units deep so nothing can fall through.
+road = Entity(
+    model="cube", color=color.rgb32(58, 58, 64),
+    scale=(ROAD_WIDTH, 2, road_span), position=(0, 0.15 - 1, road_mid_z),
+    collider="box", shader=basic_lighting_shader,
+)
 
-    # The drivable slab is a top-level entity (not a child) so its collider is solid.
-    tile = Entity(
-        model="cube", color=color.rgb32(58, 58, 64),
-        scale=(ROAD_WIDTH, 0.3, length + 0.6), position=seg.position,
+# Solid side barriers (the car is also kept between them)
+for side in (-1, 1):
+    Entity(
+        model="cube", color=color.rgb32(200, 60, 60),
+        scale=(0.5, 0.8, road_span), position=(side * (ROAD_WIDTH / 2 + 0.25), 0.4, road_mid_z),
         collider="box", shader=basic_lighting_shader,
     )
-    tile.look_at(p1)
-    for side in (-1, 1):
-        Entity(
-            parent=seg, model="cube", color=color.rgb32(200, 60, 60),
-            scale=(0.5, 0.8, length + 0.6), position=(side * (ROAD_WIDTH / 2 + 0.25), 0.4, 0),
-            shader=basic_lighting_shader,
-        )
-    if (z0 // SEGMENT_LENGTH) % 2 == 0:   # dashed centre line
-        Entity(
-            parent=seg, model="cube", color=color.rgb32(235, 235, 235),
-            scale=(0.3, 0.02, length * 0.6), position=(0, 0.17, 0),
-            shader=basic_lighting_shader,
-        )
 
-    # Rock column under raised parts of the road so the hills look solid
-    mid_y = (p0.y + p1.y) / 2
-    if mid_y > 0.6:
-        Entity(
-            model="cube", color=color.rgb32(105, 95, 85),
-            scale=(ROAD_WIDTH + 6, mid_y, SEGMENT_LENGTH + 0.5),
-            position=((p0.x + p1.x) / 2, mid_y / 2 - 0.2, (p0.z + p1.z) / 2),
-            shader=basic_lighting_shader,
-        )
+# Dashed centre line
+for z in range(0, ROAD_LENGTH, 8):
+    Entity(
+        model="cube", color=color.rgb32(235, 235, 235),
+        scale=(0.3, 0.02, 3), position=(0, 0.16, z + 2),
+        shader=basic_lighting_shader,
+    )
 
 
 # -----------------------------
@@ -226,6 +211,7 @@ for e in (car_body, car_cabin):
 # -----------------------------
 
 MAX_SPEED = 22
+TOP_SPEED_DISPLAY = 196   # top speed shown on the HUD (physics stays drivable)
 REVERSE_SPEED = -8
 ACCEL = 16
 BRAKE_DECEL = 24
@@ -235,7 +221,6 @@ STEER_RESPONSE = 4.0    # how fast the wheel turns toward the pressed direction
 STEER_RETURN = 6.0      # how fast the wheel re-centres when keys are released
 PEDAL_PRESS = 1.4       # pedal travel per second while a key is held (about 0.7s to full)
 PEDAL_RELEASE = 3.0     # pedal travel per second once the key is let go
-HILL_PULL = 12          # how strongly slopes speed you up / slow you down
 HIGH_SPEED_STEER = 0.55 # steering lock left at top speed (1 = no reduction)
 BODY_LEAN = 6           # degrees the body leans in a turn
 GRAVITY = 28
@@ -270,7 +255,6 @@ def reset_race():
     global speed, vertical_velocity, race_start_time, finish_time, steer_amount, throttle_amount, brake_amount
     car.position = start_pos
     car.rotation_y = 0
-    car.rotation_x = 0
     speed = 0.0
     vertical_velocity = 0.0
     steer_amount = 0.0
@@ -406,15 +390,6 @@ def update():
             car.y = ground_y + CAR_HEIGHT_OFFSET
             vertical_velocity = 0
 
-    # Tilt the car to match the slope and let hills help / slow it
-    slope = (road_y(car.z + 1) - road_y(car.z - 1)) / 2
-    if vertical_velocity == 0:
-        speed = clamp(speed - slope * HILL_PULL * dt, REVERSE_SPEED, MAX_SPEED)
-        target_pitch = -math.degrees(math.atan(slope))
-    else:
-        target_pitch = 0
-    car.rotation_x = lerp(car.rotation_x, target_pitch, min(1, 8 * dt))
-
     if car.y < -20:
         reset_race()
 
@@ -440,7 +415,7 @@ def update():
     # UI updates
     # -------------------------
     elapsed = finish_time if finish_time is not None else time.time() - race_start_time
-    speed_text.text = f"Speed: {abs(speed):.0f}"
+    speed_text.text = f"Speed: {abs(speed) / MAX_SPEED * TOP_SPEED_DISPLAY:.0f}"
     time_text.text = f"Time: {elapsed:.1f}s"
     progress_text.text = f"Distance: {clamp((car.z - START_Z) / (FINISH_Z - START_Z), 0, 1) * 100:.0f}%"
 
