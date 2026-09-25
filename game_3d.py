@@ -171,7 +171,11 @@ REVERSE_SPEED = -8
 ACCEL = 16
 BRAKE_DECEL = 24
 FRICTION = 8
-TURN_SPEED = 110
+TURN_SPEED = 110        # max turn rate (deg/s) at full steering lock
+STEER_RESPONSE = 4.0    # how fast the wheel turns toward the pressed direction
+STEER_RETURN = 6.0      # how fast the wheel re-centres when keys are released
+HIGH_SPEED_STEER = 0.55 # steering lock left at top speed (1 = no reduction)
+BODY_LEAN = 6           # degrees the body leans in a turn
 GRAVITY = 28
 CAR_HEIGHT_OFFSET = 0.5
 GROUND_SNAP_THRESHOLD = 0.3
@@ -179,6 +183,7 @@ CAR_HALF_WIDTH = 0.9
 
 speed = 0.0
 vertical_velocity = 0.0
+steer_amount = 0.0      # smoothed steering, -1 (left) .. 1 (right)
 race_start_time = time.time()
 finish_time = None      # set when the race is won
 best_time = None
@@ -192,11 +197,14 @@ def get_ground_y(position):
 
 
 def reset_race():
-    global speed, vertical_velocity, race_start_time, finish_time
+    global speed, vertical_velocity, race_start_time, finish_time, steer_amount
     car.position = start_pos
     car.rotation_y = 0
     speed = 0.0
     vertical_velocity = 0.0
+    steer_amount = 0.0
+    car_body.rotation_z = 0
+    car_cabin.rotation_z = 0
     race_start_time = time.time()
     finish_time = None
     win_text.enabled = False
@@ -240,7 +248,7 @@ def input(key):
 # -----------------------------
 
 def update():
-    global speed, vertical_velocity, finish_time, best_time
+    global speed, vertical_velocity, finish_time, best_time, steer_amount
 
     dt = time.dt
     won = finish_time is not None
@@ -267,15 +275,31 @@ def update():
     # -------------------------
     # Steering
     # -------------------------
+    steer_input = 0
     if not won:
-        steer = held_keys["d"] - held_keys["a"]
-        steer += held_keys["right arrow"] - held_keys["left arrow"]
+        steer_input = held_keys["d"] - held_keys["a"]
+        steer_input += held_keys["right arrow"] - held_keys["left arrow"]
+        steer_input = clamp(steer_input, -1, 1)
 
-        if abs(speed) > 0.3:
-            speed_factor = speed / MAX_SPEED
-            turn_multiplier = 1.5 if drifting else 1.0
-            car.rotation_y += steer * TURN_SPEED * turn_multiplier * speed_factor * dt
-            car.rotation_y = clamp(car.rotation_y, -80, 80)   # can't turn around on the road
+    # Ease the wheel toward the target instead of snapping, and re-centre gently.
+    rate = STEER_RESPONSE if steer_input != 0 else STEER_RETURN
+    steer_amount = lerp(steer_amount, steer_input, min(1, rate * dt))
+    if abs(steer_amount) < 0.01 and steer_input == 0:
+        steer_amount = 0
+
+    if abs(speed) > 0.3:
+        speed_ratio = abs(speed) / MAX_SPEED
+        # Slow cars pivot a little less; fast cars have reduced lock, like real steering.
+        grip = min(1, abs(speed) / 6) * (1 - (1 - HIGH_SPEED_STEER) * speed_ratio)
+        turn_multiplier = 1.4 if drifting else 1.0
+        direction = 1 if speed > 0 else -1   # steering reverses when backing up
+        car.rotation_y += steer_amount * TURN_SPEED * turn_multiplier * grip * direction * dt
+        car.rotation_y = clamp(car.rotation_y, -80, 80)   # can't turn around on the road
+
+    # Body leans outward in a turn (visual only)
+    target_lean = -steer_amount * BODY_LEAN * min(1, abs(speed) / MAX_SPEED * 1.5)
+    car_body.rotation_z = lerp(car_body.rotation_z, target_lean, min(1, 8 * dt))
+    car_cabin.rotation_z = car_body.rotation_z
 
     # -------------------------
     # Move, and keep the car on the road between the barriers
