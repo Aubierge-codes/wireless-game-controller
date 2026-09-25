@@ -1,3 +1,4 @@
+import math
 import random
 from ursina import *
 from ursina.shaders import basic_lighting_shader, unlit_shader
@@ -32,13 +33,40 @@ sky.shader = unlit_shader
 
 
 # -----------------------------
-# Road layout (fixed, straight, along +Z)
+# Road layout (long, fixed course running along +Z with bends and hills)
 # -----------------------------
 
 ROAD_WIDTH = 10
-ROAD_LENGTH = 400
-FINISH_Z = ROAD_LENGTH - 20   # crossing this line wins the race
+ROAD_LENGTH = 1600
+FINISH_Z = ROAD_LENGTH - 30   # crossing this line wins the race
 START_Z = 5
+SEGMENT_LENGTH = 6
+
+
+def course_blend(z):
+    """0 on the flat straight at the start and finish, 1 in the middle of the course."""
+    return clamp(z / 120, 0, 1) * clamp((FINISH_Z - 60 - z) / 120, 0, 1)
+
+
+def road_x(z):
+    """Sideways position of the road centre - gentle bends left and right."""
+    return course_blend(z) * (20 * math.sin(z / 95) + 9 * math.sin(z / 41))
+
+
+def road_y(z):
+    """Height of the road - mountains it climbs and then drops down from."""
+    return course_blend(z) * (5 * (1 - math.cos(z / 60)) + 3 * (1 - math.cos(z / 25)))
+
+
+def road_point(z):
+    return Vec3(road_x(z), road_y(z), z)
+
+
+def make_frame(z):
+    """An empty entity sitting on the road at z, facing along the road."""
+    frame = Entity(position=road_point(z))
+    frame.look_at(road_point(z + 1))
+    return frame
 
 
 # -----------------------------
@@ -47,11 +75,11 @@ START_Z = 5
 
 ground = Entity(
     model="plane",
-    scale=(300, 1, ROAD_LENGTH + 200),
+    scale=(400, 1, ROAD_LENGTH + 200),
     position=(0, 0, ROAD_LENGTH / 2),
     color=color.rgb32(78, 128, 62),
     texture="grass",
-    texture_scale=(100, 150),
+    texture_scale=(130, 500),
     collider="box",
     shader=basic_lighting_shader,
 )
@@ -65,72 +93,101 @@ def make_tree(x, z):
 
 
 random.seed(1)
-for _ in range(120):
-    tx = random.uniform(-60, 60)
+for _ in range(300):
     tz = random.uniform(-20, ROAD_LENGTH + 40)
-    if abs(tx) < ROAD_WIDTH:  # keep the road and its barriers clear
+    tx = random.uniform(-70, 70) + road_x(tz)
+    if abs(tx - road_x(tz)) < ROAD_WIDTH + 6:  # keep the road and its surroundings clear
         continue
     make_tree(tx, tz)
 
-
-# -----------------------------
-# Road, barriers and finish line
-# -----------------------------
-
-road = Entity(
-    model="cube",
-    color=color.rgb32(58, 58, 64),
-    scale=(ROAD_WIDTH, 0.3, ROAD_LENGTH + 20),
-    position=(0, 0, ROAD_LENGTH / 2),
-    collider="box",
-    shader=basic_lighting_shader,
-)
-
-# Dashed centre line
-for z in range(0, ROAD_LENGTH, 8):
+# Big low-poly mountains in the distance on both sides of the course
+for _ in range(24):
+    mz = random.uniform(0, ROAD_LENGTH)
+    side = random.choice((-1, 1))
+    mx = road_x(mz) + side * random.uniform(60, 110)
+    height = random.uniform(30, 70)
     Entity(
-        model="cube", color=color.rgb32(235, 235, 235),
-        scale=(0.3, 0.02, 3), position=(0, 0.17, z + 2),
+        model="diamond",
+        color=color.rgb32(random.randint(95, 125), random.randint(95, 120), random.randint(95, 115)),
+        scale=(random.uniform(40, 70), height, random.uniform(40, 70)),
+        position=(mx, height / 2 - 2, mz),
         shader=basic_lighting_shader,
     )
 
-# Side barriers (the car is kept between them)
-for side in (-1, 1):
+
+# -----------------------------
+# Road, barriers, support columns
+# -----------------------------
+
+for z0 in range(0, ROAD_LENGTH + 20, SEGMENT_LENGTH):
+    p0, p1 = road_point(z0), road_point(z0 + SEGMENT_LENGTH)
+    length = distance(p0, p1)
+
+    seg = Entity(position=(p0 + p1) / 2)
+    seg.look_at(p1)
+
     Entity(
-        model="cube", color=color.rgb32(200, 60, 60),
-        scale=(0.5, 0.8, ROAD_LENGTH + 20),
-        position=(side * (ROAD_WIDTH / 2 + 0.25), 0.4, ROAD_LENGTH / 2),
+        parent=seg, model="cube", color=color.rgb32(58, 58, 64),
+        scale=(ROAD_WIDTH, 0.3, length + 0.6), collider="box",
         shader=basic_lighting_shader,
     )
+    for side in (-1, 1):
+        Entity(
+            parent=seg, model="cube", color=color.rgb32(200, 60, 60),
+            scale=(0.5, 0.8, length + 0.6), position=(side * (ROAD_WIDTH / 2 + 0.25), 0.4, 0),
+            shader=basic_lighting_shader,
+        )
+    if (z0 // SEGMENT_LENGTH) % 2 == 0:   # dashed centre line
+        Entity(
+            parent=seg, model="cube", color=color.rgb32(235, 235, 235),
+            scale=(0.3, 0.02, length * 0.6), position=(0, 0.17, 0),
+            shader=basic_lighting_shader,
+        )
 
-# Start line
+    # Rock column under raised parts of the road so the hills look solid
+    mid_y = (p0.y + p1.y) / 2
+    if mid_y > 0.6:
+        Entity(
+            model="cube", color=color.rgb32(105, 95, 85),
+            scale=(ROAD_WIDTH + 6, mid_y, SEGMENT_LENGTH + 0.5),
+            position=((p0.x + p1.x) / 2, mid_y / 2 - 0.2, (p0.z + p1.z) / 2),
+            shader=basic_lighting_shader,
+        )
+
+
+# -----------------------------
+# Start line and finish line
+# -----------------------------
+
+start_frame = make_frame(START_Z - 2)
 Entity(
-    model="cube", color=color.rgb32(235, 235, 235),
-    scale=(ROAD_WIDTH, 0.02, 0.6), position=(0, 0.17, START_Z - 2),
+    parent=start_frame, model="cube", color=color.rgb32(235, 235, 235),
+    scale=(ROAD_WIDTH, 0.02, 0.6), position=(0, 0.17, 0),
     shader=basic_lighting_shader,
 )
 
 # Finish line: black/white checkered strip + a gate over the road
+finish_frame = make_frame(FINISH_Z)
 CHECKS = 10
 check_w = ROAD_WIDTH / CHECKS
 for row in range(2):
     for i in range(CHECKS):
         Entity(
-            model="cube",
+            parent=finish_frame, model="cube",
             color=color.black if (i + row) % 2 else color.white,
             scale=(check_w, 0.02, 1),
-            position=(-ROAD_WIDTH / 2 + check_w * (i + 0.5), 0.17, FINISH_Z + row),
+            position=(-ROAD_WIDTH / 2 + check_w * (i + 0.5), 0.17, row),
             shader=basic_lighting_shader,
         )
 for side in (-1, 1):
     Entity(
-        model="cube", color=color.rgb32(240, 200, 30),
-        scale=(0.6, 7, 0.6), position=(side * (ROAD_WIDTH / 2 + 0.5), 3.5, FINISH_Z),
+        parent=finish_frame, model="cube", color=color.rgb32(240, 200, 30),
+        scale=(0.6, 7, 0.6), position=(side * (ROAD_WIDTH / 2 + 0.5), 3.5, 0),
         shader=basic_lighting_shader,
     )
 Entity(
-    model="cube", color=color.rgb32(240, 200, 30),
-    scale=(ROAD_WIDTH + 1.6, 1.2, 0.6), position=(0, 7, FINISH_Z),
+    parent=finish_frame, model="cube", color=color.rgb32(240, 200, 30),
+    scale=(ROAD_WIDTH + 1.6, 1.2, 0.6), position=(0, 7, 0),
     shader=basic_lighting_shader,
 )
 
@@ -139,7 +196,7 @@ Entity(
 # Car (low-poly, built from primitives)
 # -----------------------------
 
-start_pos = Vec3(0, 0.5, START_Z)
+start_pos = road_point(START_Z) + Vec3(0, 0.5, 0)
 
 car = Entity(position=start_pos, rotation_y=0)   # faces +Z, down the road
 
@@ -174,6 +231,7 @@ FRICTION = 8
 TURN_SPEED = 110        # max turn rate (deg/s) at full steering lock
 STEER_RESPONSE = 4.0    # how fast the wheel turns toward the pressed direction
 STEER_RETURN = 6.0      # how fast the wheel re-centres when keys are released
+HILL_PULL = 12          # how strongly slopes speed you up / slow you down
 HIGH_SPEED_STEER = 0.55 # steering lock left at top speed (1 = no reduction)
 BODY_LEAN = 6           # degrees the body leans in a turn
 GRAVITY = 28
@@ -200,6 +258,7 @@ def reset_race():
     global speed, vertical_velocity, race_start_time, finish_time, steer_amount
     car.position = start_pos
     car.rotation_y = 0
+    car.rotation_x = 0
     speed = 0.0
     vertical_velocity = 0.0
     steer_amount = 0.0
@@ -306,7 +365,8 @@ def update():
     # -------------------------
     car.position += car.forward * speed * dt
     limit = ROAD_WIDTH / 2 - CAR_HALF_WIDTH
-    car.x = clamp(car.x, -limit, limit)
+    centre = road_x(car.z)
+    car.x = clamp(car.x, centre - limit, centre + limit)
     car.z = max(car.z, -5)
 
     # -------------------------
@@ -323,6 +383,15 @@ def update():
         if ground_y is not None and (car.y - CAR_HEIGHT_OFFSET) <= ground_y:
             car.y = ground_y + CAR_HEIGHT_OFFSET
             vertical_velocity = 0
+
+    # Tilt the car to match the slope and let hills help / slow it
+    slope = (road_y(car.z + 1) - road_y(car.z - 1)) / 2
+    if vertical_velocity == 0:
+        speed = clamp(speed - slope * HILL_PULL * dt, REVERSE_SPEED, MAX_SPEED)
+        target_pitch = -math.degrees(math.atan(slope))
+    else:
+        target_pitch = 0
+    car.rotation_x = lerp(car.rotation_x, target_pitch, min(1, 8 * dt))
 
     if car.y < -20:
         reset_race()
