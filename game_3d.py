@@ -220,6 +220,9 @@ win_text = Text(text="", origin=(0, 0), position=(0, 0.1), scale=2.5, color=colo
 # -----------------------------
 
 camera_smoothness = 7
+CAMERA_BACK = 10      # distance behind the car
+CAMERA_HEIGHT = 5.5   # height above the car
+CAMERA_LOOK_AHEAD = 22  # camera aims this far in front of the car
 
 
 # -----------------------------
@@ -313,9 +316,9 @@ def update():
     # -------------------------
     # Camera - smoothed chase cam behind the car
     # -------------------------
-    desired_camera_position = car.position + car.back * 9 + Vec3(0, 4.5, 0)
+    desired_camera_position = car.position + car.back * CAMERA_BACK + Vec3(0, CAMERA_HEIGHT, 0)
     camera.position = lerp(camera.position, desired_camera_position, dt * camera_smoothness)
-    camera.look_at(car.position + Vec3(0, 1, 0))
+    camera.look_at(car.position + car.forward * CAMERA_LOOK_AHEAD + Vec3(0, 1, 0))
 
     # -------------------------
     # UI updates
@@ -326,6 +329,6 @@ def update():
     progress_text.text = f"Distance: {clamp((car.z - START_Z) / (FINISH_Z - START_Z), 0, 1) * 100:.0f}%"
 
 
-camera.position = start_pos + Vec3(0, 5, -9)
+camera.position = start_pos + Vec3(0, CAMERA_HEIGHT, -CAMERA_BACK)
 
 app.run()
