@@ -1,4 +1,3 @@
-import math
 import random
 from ursina import *
 from ursina.shaders import basic_lighting_shader, unlit_shader
@@ -6,8 +5,8 @@ from ursina.lights import DirectionalLight, AmbientLight
 
 
 # =============================================================
-# PolyDrive - a small low-poly time-trial racer, PolyTrack-style
-# WASD / arrows = drive, SPACE = handbrake/drift, R = reset
+# PolyDrive - drive down a straight road to the finish line
+# WASD / arrows = drive, SPACE = drift, ENTER = reset
 # =============================================================
 
 app = Ursina()
@@ -16,7 +15,6 @@ window.title = "PolyDrive"
 window.borderless = False
 window.fullscreen = False
 window.color = color.rgb32(120, 170, 220)
-
 
 
 # -----------------------------
@@ -30,8 +28,17 @@ sun.color = color.rgb32(255, 244, 214)
 ambient = AmbientLight(color=color.rgba32(150, 165, 190, 102))
 
 sky = Sky(color=color.rgb32(130, 180, 230))
-sky.shader = unlit_shader  # sky must not be lit, otherwise it renders as a white screen
+sky.shader = unlit_shader
 
+
+# -----------------------------
+# Road layout (fixed, straight, along +Z)
+# -----------------------------
+
+ROAD_WIDTH = 10
+ROAD_LENGTH = 400
+FINISH_Z = ROAD_LENGTH - 20   # crossing this line wins the race
+START_Z = 5
 
 
 # -----------------------------
@@ -40,148 +47,101 @@ sky.shader = unlit_shader  # sky must not be lit, otherwise it renders as a whit
 
 ground = Entity(
     model="plane",
-    scale=(120, 1, 120),
+    scale=(300, 1, ROAD_LENGTH + 200),
+    position=(0, 0, ROAD_LENGTH / 2),
     color=color.rgb32(78, 128, 62),
     texture="grass",
-    texture_scale=(40, 40),
+    texture_scale=(100, 150),
     collider="box",
+    shader=basic_lighting_shader,
 )
-ground.shader = basic_lighting_shader
 
-# Scattered low-poly trees/rocks around the track, kept clear of the track area.
+
 def make_tree(x, z):
     trunk_color = color.rgb32(random.randint(70, 95), random.randint(48, 60), random.randint(30, 38))
     leaf_color = color.rgb32(random.randint(40, 60), random.randint(85, 115), random.randint(35, 50))
     Entity(model="cube", color=trunk_color, scale=(0.4, 1.6, 0.4), position=(x, 0.8, z), shader=basic_lighting_shader)
     Entity(model="cube", color=leaf_color, scale=(1.6, 1.8, 1.6), position=(x, 2.1, z), shader=basic_lighting_shader)
 
+
 random.seed(1)
-for _ in range(40):
-    tx = random.uniform(-55, 55)
-    tz = random.uniform(-55, 55)
-    if abs(tx) < 28 and abs(tz) < 20:  # keep clear of the track loop
+for _ in range(120):
+    tx = random.uniform(-60, 60)
+    tz = random.uniform(-20, ROAD_LENGTH + 40)
+    if abs(tx) < ROAD_WIDTH:  # keep the road and its barriers clear
         continue
     make_tree(tx, tz)
 
 
 # -----------------------------
-# Track generation (a stadium loop with one jump gap)
+# Road, barriers and finish line
 # -----------------------------
 
-TRACK_WIDTH = 8
-STRAIGHT_LENGTH = 30
-TURN_RADIUS = 10
-JUMP_HEIGHT = 3
+road = Entity(
+    model="cube",
+    color=color.rgb32(58, 58, 64),
+    scale=(ROAD_WIDTH, 0.3, ROAD_LENGTH + 20),
+    position=(0, 0, ROAD_LENGTH / 2),
+    collider="box",
+    shader=basic_lighting_shader,
+)
 
-
-def build_track_points():
-    points = []
-
-    # Bottom straight (with a ramp -> gap -> landing ramp), z = -TURN_RADIUS
-    z = -TURN_RADIUS
-    bottom = [
-        (-STRAIGHT_LENGTH / 2, 0),
-        (-6, 0),
-        (-3, JUMP_HEIGHT * 0.5),
-        (0, JUMP_HEIGHT),      # ramp launch point
-        (9, JUMP_HEIGHT),      # landing ramp top (gap is between these two)
-        (12, JUMP_HEIGHT * 0.33),
-        (STRAIGHT_LENGTH / 2, 0),
-    ]
-    for i, (x, y) in enumerate(bottom):
-        gap_after = (x == 0)  # the launch point has no tile connecting to the next point
-        points.append({"pos": Vec3(x, y, z), "gap_after": gap_after})
-
-    # Right-hand turn (semicircle), center (STRAIGHT_LENGTH/2, 0, 0)
-    cx = STRAIGHT_LENGTH / 2
-    steps = 10
-    for i in range(1, steps):
-        angle = math.radians(-90 + (180 * i / steps))
-        x = cx + TURN_RADIUS * math.cos(angle)
-        zz = TURN_RADIUS * math.sin(angle)
-        points.append({"pos": Vec3(x, 0, zz), "gap_after": False})
-
-    # Top straight, z = +TURN_RADIUS, going back the other way
-    for x in (STRAIGHT_LENGTH / 2, 0, -STRAIGHT_LENGTH / 2):
-        points.append({"pos": Vec3(x, 0, TURN_RADIUS), "gap_after": False})
-
-    # Left-hand turn (semicircle), center (-STRAIGHT_LENGTH/2, 0, 0)
-    cx = -STRAIGHT_LENGTH / 2
-    for i in range(1, steps):
-        angle = math.radians(90 + (180 * i / steps))
-        x = cx + TURN_RADIUS * math.cos(angle)
-        zz = TURN_RADIUS * math.sin(angle)
-        points.append({"pos": Vec3(x, 0, zz), "gap_after": False})
-
-    return points
-
-
-track_points = build_track_points()
-num_points = len(track_points)
-
-track_tiles = []
-for i in range(num_points):
-    p0 = track_points[i]
-    p1 = track_points[(i + 1) % num_points]
-
-    if p0["gap_after"]:
-        continue  # this is the jump gap - deliberately leave no road here
-
-    mid = (p0["pos"] + p1["pos"]) / 2
-    length = distance(p0["pos"], p1["pos"])
-
-    is_start_line = (i == 0)
-    tile = Entity(
-        model="cube",
-        color=color.rgb32(230, 230, 235) if is_start_line else color.rgb32(58, 58, 64),
-        scale=(TRACK_WIDTH, 0.3, max(length, 0.5)),
-        position=mid,
-        collider="box",
-    )
-    tile.look_at(p1["pos"])
-    tile.shader = basic_lighting_shader
-    track_tiles.append(tile)
-
-# Thin ramp guard rails at the jump edges so the gap reads clearly.
-for x, label_color in ((0, color.orange), (9, color.orange)):
+# Dashed centre line
+for z in range(0, ROAD_LENGTH, 8):
     Entity(
-        model="cube",
-        color=label_color,
-        scale=(TRACK_WIDTH + 0.4, 0.6, 0.3),
-        position=(x, JUMP_HEIGHT + 0.3, -TURN_RADIUS),
+        model="cube", color=color.rgb32(235, 235, 235),
+        scale=(0.3, 0.02, 3), position=(0, 0.17, z + 2),
+        shader=basic_lighting_shader,
     )
 
-
-# -----------------------------
-# Checkpoints (in driving order, looping back to the start/finish)
-# -----------------------------
-
-checkpoint_indices = [num_points // 3, (2 * num_points) // 3, 0]
-checkpoint_positions = [track_points[i]["pos"] for i in checkpoint_indices]
-
-for i, pos in enumerate(checkpoint_positions):
-    pole_color = color.lime if i < len(checkpoint_positions) - 1 else color.red
+# Side barriers (the car is kept between them)
+for side in (-1, 1):
     Entity(
-        model="cube",
-        color=pole_color,
-        scale=(0.3, 3, 0.3),
-        position=(pos.x - TRACK_WIDTH / 2 - 0.5, 1.5, pos.z),
+        model="cube", color=color.rgb32(200, 60, 60),
+        scale=(0.5, 0.8, ROAD_LENGTH + 20),
+        position=(side * (ROAD_WIDTH / 2 + 0.25), 0.4, ROAD_LENGTH / 2),
+        shader=basic_lighting_shader,
     )
+
+# Start line
+Entity(
+    model="cube", color=color.rgb32(235, 235, 235),
+    scale=(ROAD_WIDTH, 0.02, 0.6), position=(0, 0.17, START_Z - 2),
+    shader=basic_lighting_shader,
+)
+
+# Finish line: black/white checkered strip + a gate over the road
+CHECKS = 10
+check_w = ROAD_WIDTH / CHECKS
+for row in range(2):
+    for i in range(CHECKS):
+        Entity(
+            model="cube",
+            color=color.black if (i + row) % 2 else color.white,
+            scale=(check_w, 0.02, 1),
+            position=(-ROAD_WIDTH / 2 + check_w * (i + 0.5), 0.17, FINISH_Z + row),
+            shader=basic_lighting_shader,
+        )
+for side in (-1, 1):
     Entity(
-        model="cube",
-        color=pole_color,
-        scale=(0.3, 3, 0.3),
-        position=(pos.x + TRACK_WIDTH / 2 + 0.5, 1.5, pos.z),
+        model="cube", color=color.rgb32(240, 200, 30),
+        scale=(0.6, 7, 0.6), position=(side * (ROAD_WIDTH / 2 + 0.5), 3.5, FINISH_Z),
+        shader=basic_lighting_shader,
     )
+Entity(
+    model="cube", color=color.rgb32(240, 200, 30),
+    scale=(ROAD_WIDTH + 1.6, 1.2, 0.6), position=(0, 7, FINISH_Z),
+    shader=basic_lighting_shader,
+)
 
 
 # -----------------------------
 # Car (low-poly, built from primitives)
 # -----------------------------
 
-start_pos = track_points[0]["pos"] + Vec3(0, 0.5, 0)
+start_pos = Vec3(0, 0.5, START_Z)
 
-car = Entity(position=start_pos, rotation_y=0)
+car = Entity(position=start_pos, rotation_y=0)   # faces +Z, down the road
 
 car_body = Entity(
     parent=car, model="cube", color=color.rgb32(210, 40, 40),
@@ -215,15 +175,13 @@ TURN_SPEED = 110
 GRAVITY = 28
 CAR_HEIGHT_OFFSET = 0.5
 GROUND_SNAP_THRESHOLD = 0.3
+CAR_HALF_WIDTH = 0.9
 
 speed = 0.0
 vertical_velocity = 0.0
-grounded = True
-
-current_checkpoint = 0
-last_checkpoint_pos = start_pos
-lap_start_time = time.time()
-best_lap_time = None
+race_start_time = time.time()
+finish_time = None      # set when the race is won
+best_time = None
 
 
 def get_ground_y(position):
@@ -233,27 +191,16 @@ def get_ground_y(position):
     return None
 
 
-def respawn_car():
-    global speed, vertical_velocity
-    car.position = last_checkpoint_pos + Vec3(0, 1, 0)
-    speed = 0.0
-    vertical_velocity = 0.0
-
-
 def reset_race():
-    global current_checkpoint, last_checkpoint_pos, lap_start_time
+    global speed, vertical_velocity, race_start_time, finish_time
     car.position = start_pos
     car.rotation_y = 0
-    current_checkpoint = 0
-    last_checkpoint_pos = start_pos
-    lap_start_time = time.time()
-    reset_speed()
-
-
-def reset_speed():
-    global speed, vertical_velocity
     speed = 0.0
     vertical_velocity = 0.0
+    race_start_time = time.time()
+    finish_time = None
+    win_text.enabled = False
+    camera.position = start_pos + car.back * 9 + Vec3(0, 4.5, 0)
 
 
 # -----------------------------
@@ -261,10 +208,11 @@ def reset_speed():
 # -----------------------------
 
 speed_text = Text(text="Speed: 0", position=(-0.85, 0.45), scale=1.3)
-lap_text = Text(text="Lap: 0.0s", position=(-0.85, 0.40), scale=1.3)
+time_text = Text(text="Time: 0.0s", position=(-0.85, 0.40), scale=1.3)
 best_text = Text(text="Best: --", position=(-0.85, 0.35), scale=1.3)
-checkpoint_text = Text(text=f"Checkpoint 1/{len(checkpoint_positions)}", position=(-0.85, 0.30), scale=1.1)
-instructions = Text(text="WASD/Arrows = Drive   SPACE = Drift   R = Reset", position=(-0.85, -0.46), scale=0.9)
+progress_text = Text(text="Distance: 0%", position=(-0.85, 0.30), scale=1.1)
+instructions = Text(text="WASD/Arrows = Drive   SPACE = Drift   ENTER = Reset", position=(-0.85, -0.46), scale=0.9)
+win_text = Text(text="", origin=(0, 0), position=(0, 0.1), scale=2.5, color=color.yellow, enabled=False)
 
 
 # -----------------------------
@@ -279,7 +227,7 @@ camera_smoothness = 7
 # -----------------------------
 
 def input(key):
-    if key == "r":
+    if key in ("enter", "return"):
         reset_race()
 
 
@@ -288,16 +236,16 @@ def input(key):
 # -----------------------------
 
 def update():
-    global speed, vertical_velocity, grounded
-    global current_checkpoint, last_checkpoint_pos, lap_start_time, best_lap_time
+    global speed, vertical_velocity, finish_time, best_time
 
     dt = time.dt
+    won = finish_time is not None
 
     # -------------------------
-    # Throttle / brake
+    # Throttle / brake (after winning the car just coasts to a stop)
     # -------------------------
-    throttle = held_keys["w"] or held_keys["up arrow"]
-    brake = held_keys["s"] or held_keys["down arrow"]
+    throttle = (held_keys["w"] or held_keys["up arrow"]) and not won
+    brake = (held_keys["s"] or held_keys["down arrow"]) and not won
     drifting = held_keys["space"]
 
     if throttle:
@@ -313,59 +261,54 @@ def update():
     speed = clamp(speed, REVERSE_SPEED, MAX_SPEED)
 
     # -------------------------
-    # Steering (scales with speed, drifting loosens the turn rate)
+    # Steering
     # -------------------------
-    steer = held_keys["d"] - held_keys["a"]
-    steer += held_keys["right arrow"] - held_keys["left arrow"]
+    if not won:
+        steer = held_keys["d"] - held_keys["a"]
+        steer += held_keys["right arrow"] - held_keys["left arrow"]
 
-    if abs(speed) > 0.3:
-        speed_factor = speed / MAX_SPEED
-        turn_multiplier = 1.5 if drifting else 1.0
-        car.rotation_y += steer * TURN_SPEED * turn_multiplier * speed_factor * dt
+        if abs(speed) > 0.3:
+            speed_factor = speed / MAX_SPEED
+            turn_multiplier = 1.5 if drifting else 1.0
+            car.rotation_y += steer * TURN_SPEED * turn_multiplier * speed_factor * dt
+            car.rotation_y = clamp(car.rotation_y, -80, 80)   # can't turn around on the road
 
     # -------------------------
-    # Move forward along facing direction
+    # Move, and keep the car on the road between the barriers
     # -------------------------
     car.position += car.forward * speed * dt
+    limit = ROAD_WIDTH / 2 - CAR_HALF_WIDTH
+    car.x = clamp(car.x, -limit, limit)
+    car.z = max(car.z, -5)
 
     # -------------------------
-    # Vertical physics (ramps + the jump gap)
+    # Vertical physics
     # -------------------------
     ground_y = get_ground_y(car.position)
 
     if ground_y is not None and (car.y - CAR_HEIGHT_OFFSET - ground_y) <= GROUND_SNAP_THRESHOLD and vertical_velocity <= 0.1:
         car.y = ground_y + CAR_HEIGHT_OFFSET
         vertical_velocity = 0
-        grounded = True
     else:
-        grounded = False
         vertical_velocity -= GRAVITY * dt
         car.y += vertical_velocity * dt
         if ground_y is not None and (car.y - CAR_HEIGHT_OFFSET) <= ground_y:
             car.y = ground_y + CAR_HEIGHT_OFFSET
             vertical_velocity = 0
-            grounded = True
 
     if car.y < -20:
-        respawn_car()
+        reset_race()
 
     # -------------------------
-    # Checkpoint / lap logic
+    # Win check
     # -------------------------
-    target = checkpoint_positions[current_checkpoint]
-    if distance(car.position, target) < 6:
-        last_checkpoint_pos = target
-        if current_checkpoint == len(checkpoint_positions) - 1:
-            # crossed the finish line - lap complete
-            lap_time = time.time() - lap_start_time
-            if best_lap_time is None or lap_time < best_lap_time:
-                best_lap_time = lap_time
-                best_text.text = f"Best: {best_lap_time:.2f}s"
-            lap_start_time = time.time()
-            current_checkpoint = 0
-        else:
-            current_checkpoint += 1
-        checkpoint_text.text = f"Checkpoint {current_checkpoint + 1}/{len(checkpoint_positions)}"
+    if not won and car.z >= FINISH_Z:
+        finish_time = time.time() - race_start_time
+        if best_time is None or finish_time < best_time:
+            best_time = finish_time
+            best_text.text = f"Best: {best_time:.2f}s"
+        win_text.text = f"YOU WIN!\n{finish_time:.2f}s\nPress ENTER to race again"
+        win_text.enabled = True
 
     # -------------------------
     # Camera - smoothed chase cam behind the car
@@ -377,8 +320,10 @@ def update():
     # -------------------------
     # UI updates
     # -------------------------
+    elapsed = finish_time if finish_time is not None else time.time() - race_start_time
     speed_text.text = f"Speed: {abs(speed):.0f}"
-    lap_text.text = f"Lap: {time.time() - lap_start_time:.1f}s"
+    time_text.text = f"Time: {elapsed:.1f}s"
+    progress_text.text = f"Distance: {clamp((car.z - START_Z) / (FINISH_Z - START_Z), 0, 1) * 100:.0f}%"
 
 
 camera.position = start_pos + Vec3(0, 5, -9)
