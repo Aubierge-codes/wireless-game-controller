@@ -74,9 +74,9 @@ def make_frame(z):
 # -----------------------------
 
 ground = Entity(
-    model="plane",
+    model="cube",   # a slab whose top face sits exactly at y = 0
     scale=(400, 1, ROAD_LENGTH + 200),
-    position=(0, 0, ROAD_LENGTH / 2),
+    position=(0, -0.5, ROAD_LENGTH / 2),
     color=color.rgb32(78, 128, 62),
     texture="grass",
     texture_scale=(130, 500),
@@ -126,11 +126,13 @@ for z0 in range(0, ROAD_LENGTH + 20, SEGMENT_LENGTH):
     seg = Entity(position=(p0 + p1) / 2)
     seg.look_at(p1)
 
-    Entity(
-        parent=seg, model="cube", color=color.rgb32(58, 58, 64),
-        scale=(ROAD_WIDTH, 0.3, length + 0.6), collider="box",
-        shader=basic_lighting_shader,
+    # The drivable slab is a top-level entity (not a child) so its collider is solid.
+    tile = Entity(
+        model="cube", color=color.rgb32(58, 58, 64),
+        scale=(ROAD_WIDTH, 0.3, length + 0.6), position=seg.position,
+        collider="box", shader=basic_lighting_shader,
     )
+    tile.look_at(p1)
     for side in (-1, 1):
         Entity(
             parent=seg, model="cube", color=color.rgb32(200, 60, 60),
@@ -231,6 +233,8 @@ FRICTION = 8
 TURN_SPEED = 110        # max turn rate (deg/s) at full steering lock
 STEER_RESPONSE = 4.0    # how fast the wheel turns toward the pressed direction
 STEER_RETURN = 6.0      # how fast the wheel re-centres when keys are released
+PEDAL_PRESS = 1.4       # pedal travel per second while a key is held (about 0.7s to full)
+PEDAL_RELEASE = 3.0     # pedal travel per second once the key is let go
 HILL_PULL = 12          # how strongly slopes speed you up / slow you down
 HIGH_SPEED_STEER = 0.55 # steering lock left at top speed (1 = no reduction)
 BODY_LEAN = 6           # degrees the body leans in a turn
@@ -242,26 +246,36 @@ CAR_HALF_WIDTH = 0.9
 speed = 0.0
 vertical_velocity = 0.0
 steer_amount = 0.0      # smoothed steering, -1 (left) .. 1 (right)
+throttle_amount = 0.0   # how far the accelerator is pressed, 0..1
+brake_amount = 0.0      # how far the brake is pressed, 0..1
 race_start_time = time.time()
 finish_time = None      # set when the race is won
 best_time = None
 
 
+def approach(value, target, step):
+    if value < target:
+        return min(target, value + step)
+    return max(target, value - step)
+
+
 def get_ground_y(position):
     hit = raycast(position + Vec3(0, 6, 0), direction=Vec3(0, -1, 0), distance=25, ignore=(car,))
     if hit.hit:
-        return hit.point.y
+        return hit.world_point.y  # world coords, not local to the hit entity
     return None
 
 
 def reset_race():
-    global speed, vertical_velocity, race_start_time, finish_time, steer_amount
+    global speed, vertical_velocity, race_start_time, finish_time, steer_amount, throttle_amount, brake_amount
     car.position = start_pos
     car.rotation_y = 0
     car.rotation_x = 0
     speed = 0.0
     vertical_velocity = 0.0
     steer_amount = 0.0
+    throttle_amount = 0.0
+    brake_amount = 0.0
     car_body.rotation_z = 0
     car_cabin.rotation_z = 0
     race_start_time = time.time()
@@ -307,7 +321,7 @@ def input(key):
 # -----------------------------
 
 def update():
-    global speed, vertical_velocity, finish_time, best_time, steer_amount
+    global speed, vertical_velocity, finish_time, best_time, steer_amount, throttle_amount, brake_amount
 
     dt = time.dt
     won = finish_time is not None
@@ -315,19 +329,27 @@ def update():
     # -------------------------
     # Throttle / brake (after winning the car just coasts to a stop)
     # -------------------------
-    throttle = (held_keys["w"] or held_keys["up arrow"]) and not won
-    brake = (held_keys["s"] or held_keys["down arrow"]) and not won
+    throttle_key = (held_keys["w"] or held_keys["up arrow"]) and not won
+    brake_key = (held_keys["s"] or held_keys["down arrow"]) and not won
     drifting = held_keys["space"]
 
-    if throttle:
-        speed += ACCEL * dt
-    elif brake:
-        speed -= BRAKE_DECEL * dt
-    else:
+    # Keys are on/off, so ramp each pedal: the longer you hold it, the harder it pushes.
+    throttle_amount = approach(throttle_amount, 1 if throttle_key else 0, (PEDAL_PRESS if throttle_key else PEDAL_RELEASE) * dt)
+    brake_amount = approach(brake_amount, 1 if brake_key else 0, (PEDAL_PRESS if brake_key else PEDAL_RELEASE) * dt)
+
+    if throttle_amount > 0:
+        speed += ACCEL * throttle_amount * dt
+    if brake_amount > 0:
+        speed -= BRAKE_DECEL * brake_amount * dt
+    if throttle_amount == 0 and brake_amount == 0:
         if speed > 0:
             speed = max(0, speed - FRICTION * dt)
         elif speed < 0:
             speed = min(0, speed + FRICTION * dt)
+
+    # Top speed depends on how far the pedal is down, so a light press cruises slower.
+    if speed > 0 and throttle_amount > 0:
+        speed = min(speed, MAX_SPEED * (0.25 + 0.75 * throttle_amount))
 
     speed = clamp(speed, REVERSE_SPEED, MAX_SPEED)
 
