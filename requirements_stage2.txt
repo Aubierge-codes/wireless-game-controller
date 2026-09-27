@@ -1,2 +1,3 @@
-﻿pygame==2.6.1
-ursina
+pygame==2.6.1
+ursina==7.0.0
+pyserial==3.5
